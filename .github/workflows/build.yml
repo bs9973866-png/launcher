@@ -5,6 +5,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   windows:
     runs-on: windows-latest
@@ -22,12 +25,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
-      - name: Generate icon
+      - name: Generate app icon from uploaded artwork
         shell: pwsh
         run: ./build_icon.ps1
 
       - name: Build EXE
-        run: pyinstaller --noconfirm --clean --onefile --windowed --name NovaCraftLauncher --icon icon.ico launcher.py
+        shell: pwsh
+        run: pyinstaller --noconfirm --clean --onefile --windowed --name NovaCraftLauncher --icon icon.ico --add-data "icon.png;." --hidden-import PySide6.QtWebEngineWidgets --hidden-import PySide6.QtWebEngineCore --collect-all PySide6.QtWebEngineWidgets --collect-all PySide6.QtWebEngineCore launcher.py
 
       - name: Install Inno Setup
         shell: pwsh
@@ -42,9 +46,13 @@ jobs:
         with:
           name: NovaCraft-Launcher-Windows
           path: dist/NovaCraft-Launcher-Setup.exe
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Upload portable EXE
         uses: actions/upload-artifact@v4
         with:
           name: NovaCraft-Launcher-Portable
           path: dist/NovaCraftLauncher.exe
+          if-no-files-found: error
+          retention-days: 90
