@@ -31,7 +31,7 @@ jobs:
 
       - name: Build EXE
         shell: pwsh
-        run: pyinstaller --noconfirm --clean --onefile --windowed --name NovaCraftLauncher --icon icon.ico --add-data "icon.png;." --hidden-import PySide6.QtWebEngineWidgets --hidden-import PySide6.QtWebEngineCore --collect-all PySide6.QtWebEngineWidgets --collect-all PySide6.QtWebEngineCore launcher.py
+        run: pyinstaller --noconfirm --clean --onefile --windowed --name NovaCraftLauncher --icon icon.ico --add-data "icon.ico;." --add-data "icon.png;." --hidden-import PySide6.QtWebEngineWidgets --hidden-import PySide6.QtWebEngineCore --collect-all PySide6.QtWebEngineWidgets --collect-all PySide6.QtWebEngineCore launcher.py
 
       - name: Install Inno Setup
         shell: pwsh
