@@ -759,7 +759,10 @@ class MainWindow(QMainWindow):
         remove.clicked.connect(self.remove_skin)
         il.addWidget(upload)
         il.addWidget(remove)
-        notice = QLabel("Важно: офлайн-скин можно просматривать здесь. Vanilla Minecraft не публикует его другим игрокам автоматически; для скина в самой игре нужна поддержка со стороны аккаунта, сервера или клиента.")
+        self.skin_loader_button = QPushButton("Установить поддержку скина в игре")
+        self.skin_loader_button.clicked.connect(self.install_custom_skin_loader)
+        il.addWidget(self.skin_loader_button)
+        notice = QLabel("Скин сохранится локально. Для его показа внутри Minecraft можно установить CustomSkinLoader в сборку с мод-загрузчиком. Такой локальный скин виден тебе; другим игрокам он автоматически не передаётся.")
         notice.setObjectName("muted")
         notice.setWordWrap(True)
         il.addWidget(notice)
@@ -1074,6 +1077,94 @@ class MainWindow(QMainWindow):
         self.skin_preview.show_skin(str(target))
         self.status.setText("Скин загружен и сохранён для этого профиля.")
 
+    def install_custom_skin_loader(self) -> None:
+        account = self.cfg.get("account")
+        if not account:
+            QMessageBox.information(self, "Сначала выбери профиль", "Войди с офлайн-ником или подключи Ely.by.")
+            return
+        username = account.get("username", "")
+        skin_path = Path(self.cfg.get("skins", {}).get(username, ""))
+        if not skin_path.is_file():
+            QMessageBox.information(self, "Сначала загрузи скин", "Нажми «Загрузить PNG-скин», затем повтори установку.")
+            return
+        inst = dict(self.current_instance())
+        loader = str(inst.get("loader", "Vanilla"))
+        if loader == "Vanilla":
+            QMessageBox.information(self, "Нужен загрузчик модов",
+                "CustomSkinLoader работает как клиентский мод. Открой «Сборки» и выбери или создай профиль Fabric, Forge, NeoForge или Quilt.")
+            self.switch_page("Сборки")
+            return
+        loader_id = {"Fabric": "fabric", "Quilt": "fabric", "Forge": "forge", "NeoForge": "neoforge"}.get(loader)
+        if not loader_id:
+            QMessageBox.warning(self, "Загрузчик", f"Неизвестный загрузчик: {loader}")
+            return
+        self.skin_loader_button.setEnabled(False)
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.show()
+        self.status.setText("Ищу версию CustomSkinLoader, совместимую с активной сборкой…")
+
+        def task(report):
+            version = str(inst.get("version", ""))
+            params = {"game_versions": json.dumps([version]), "loaders": json.dumps([loader_id])}
+            response = requests.get(
+                "https://api.modrinth.com/v2/project/customskinloader/version",
+                params=params,
+                headers={"User-Agent": APP_USER_AGENT},
+                timeout=30,
+            )
+            response.raise_for_status()
+            releases = response.json()
+            if not releases and loader == "Quilt":
+                # The project publishes Quilt-compatible artifacts under the Fabric loader tag.
+                params["loaders"] = json.dumps(["quilt"])
+                response = requests.get(
+                    "https://api.modrinth.com/v2/project/customskinloader/version",
+                    params=params,
+                    headers={"User-Agent": APP_USER_AGENT},
+                    timeout=30,
+                )
+                response.raise_for_status()
+                releases = response.json()
+            if not releases:
+                raise RuntimeError(f"Для Minecraft {version} и {loader} совместимый CustomSkinLoader не найден.")
+            chosen = releases[0]
+            file = next((x for x in chosen.get("files", []) if x.get("primary")), None)
+            if file is None and chosen.get("files"):
+                file = chosen["files"][0]
+            if not file or not file.get("url") or not file.get("filename"):
+                raise RuntimeError("Modrinth не предоставил файл CustomSkinLoader.")
+            report(35, "Скачиваю CustomSkinLoader…")
+            download = requests.get(file["url"], headers={"User-Agent": APP_USER_AGENT}, timeout=90)
+            download.raise_for_status()
+            mods_dir = profile_dir(inst) / "mods"
+            mods_dir.mkdir(parents=True, exist_ok=True)
+            jar = mods_dir / Path(file["filename"]).name
+            jar.write_bytes(download.content)
+            report(85, "Подключаю локальный скин к сборке…")
+            local_skin = profile_dir(inst) / "CustomSkinLoader" / "LocalSkin" / "skins" / (username + ".png")
+            local_skin.parent.mkdir(parents=True, exist_ok=True)
+            local_skin.write_bytes(skin_path.read_bytes())
+            return f"Установлен {jar.name}. Локальный скин подключён для ника {username}. Перезапусти игру; другие игроки не получат этот скин автоматически."
+
+        self.skin_loader_worker = Worker(task)
+        self.skin_loader_worker.progress.connect(self._on_progress)
+        self.skin_loader_worker.done.connect(self._custom_skin_loader_done)
+        self.skin_loader_worker.failed.connect(self._custom_skin_loader_failed)
+        self.skin_loader_worker.start()
+
+    def _custom_skin_loader_done(self, message: str) -> None:
+        self.progress.hide()
+        self.skin_loader_button.setEnabled(True)
+        self.status.setText(message)
+        QMessageBox.information(self, "Поддержка локального скина", message)
+
+    def _custom_skin_loader_failed(self, message: str) -> None:
+        self.progress.hide()
+        self.skin_loader_button.setEnabled(True)
+        self.status.setText("Не удалось установить поддержку скина: " + message)
+        QMessageBox.warning(self, "CustomSkinLoader", message)
+
     def remove_skin(self) -> None:
         account = self.cfg.get("account")
         if not account: return
@@ -1120,6 +1211,12 @@ class MainWindow(QMainWindow):
             game_dir = profile_dir(inst)
             for name in ("mods", "config", "resourcepacks", "saves", "screenshots"):
                 (game_dir / name).mkdir(exist_ok=True)
+            # Keep this profile's local skin synced for CustomSkinLoader's LocalSkin provider.
+            skin_source = self.cfg.get("skins", {}).get(account.get("username", ""))
+            if skin_source and Path(skin_source).is_file() and str(inst.get("loader", "Vanilla")) != "Vanilla":
+                local_skin = game_dir / "CustomSkinLoader" / "LocalSkin" / "skins" / (account["username"] + ".png")
+                local_skin.parent.mkdir(parents=True, exist_ok=True)
+                local_skin.write_bytes(Path(skin_source).read_bytes())
             cb = self._game_callbacks(report)
             loader = str(inst.get("loader", "Vanilla"))
             base_version = str(inst["version"])
