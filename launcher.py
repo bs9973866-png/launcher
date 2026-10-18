@@ -14,7 +14,7 @@ from typing import Any, Callable
 import requests
 import minecraft_launcher_lib
 from PySide6.QtCore import Qt, QThread, Signal, QUrl
-from PySide6.QtGui import QIcon, QDesktopServices, QPixmap
+from PySide6.QtGui import QIcon, QDesktopServices, QPixmap, QImage, QPainter, QPolygonF, QTransform, QPointF, QRectF, QColor
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QPushButton, QComboBox, QLineEdit, QListWidget, QListWidgetItem,
@@ -162,61 +162,171 @@ class Worker(QThread):
 
 
 class SkinPreview(QWidget):
-    """Lazy embedded 3D viewer; skinview3d supplies the draggable model."""
+    """Lightweight textured isometric Minecraft skin viewer using Qt only."""
+    FACE_UV = {
+        "head": {
+            "front": (8, 8, 8, 8), "back": (24, 8, 8, 8), "left": (16, 8, 8, 8),
+            "right": (0, 8, 8, 8), "top": (8, 0, 8, 8), "bottom": (16, 0, 8, 8),
+        },
+        "hat": {
+            "front": (40, 8, 8, 8), "back": (56, 8, 8, 8), "left": (48, 8, 8, 8),
+            "right": (32, 8, 8, 8), "top": (40, 0, 8, 8), "bottom": (48, 0, 8, 8),
+        },
+        "body": {
+            "front": (20, 20, 8, 12), "back": (32, 20, 8, 12), "left": (28, 20, 4, 12),
+            "right": (16, 20, 4, 12), "top": (20, 16, 8, 4), "bottom": (28, 16, 8, 4),
+        },
+        "right_arm": {
+            "front": (44, 20, 4, 12), "back": (52, 20, 4, 12), "left": (48, 20, 4, 12),
+            "right": (40, 20, 4, 12), "top": (44, 16, 4, 4), "bottom": (48, 16, 4, 4),
+        },
+        "left_arm": {
+            "front": (36, 52, 4, 12), "back": (52, 52, 4, 12), "left": (56, 52, 4, 12),
+            "right": (32, 52, 4, 12), "top": (36, 48, 4, 4), "bottom": (40, 48, 4, 4),
+        },
+        "right_leg": {
+            "front": (4, 20, 4, 12), "back": (12, 20, 4, 12), "left": (8, 20, 4, 12),
+            "right": (0, 20, 4, 12), "top": (4, 16, 4, 4), "bottom": (8, 16, 4, 4),
+        },
+        "left_leg": {
+            "front": (20, 52, 4, 12), "back": (28, 52, 4, 12), "left": (24, 52, 4, 12),
+            "right": (16, 52, 4, 12), "top": (20, 48, 4, 4), "bottom": (24, 48, 4, 4),
+        },
+    }
+    FACE_POINTS = {
+        "front": ("tl_front", "tr_front", "br_front", "bl_front"),
+        "back": ("tr_back", "tl_back", "bl_back", "br_back"),
+        "left": ("tl_back", "tl_front", "bl_front", "bl_back"),
+        "right": ("tr_front", "tr_back", "br_back", "br_front"),
+        "top": ("tl_back", "tl_front", "tr_front", "tr_back"),
+        "bottom": ("bl_front", "bl_back", "br_back", "br_front"),
+    }
+
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
-        self._view = None
-        self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(0, 0, 0, 0)
-        self.placeholder = QLabel("3D-ПРОСМОТР СКИНА\n\nЗагрузи PNG-скин, чтобы посмотреть модель.\nМодель можно вращать мышью.")
-        self.placeholder.setObjectName("skinPlaceholder")
-        self.placeholder.setAlignment(Qt.AlignCenter)
-        self.placeholder.setMinimumHeight(360)
-        self._layout.addWidget(self.placeholder)
+        self.setMinimumHeight(360)
+        self.setMinimumWidth(260)
+        self.setToolTip("Зажми левую кнопку мыши и двигай, чтобы вращать модель")
+        self.skin_path: Path | None = None
+        self.skin_image: QImage | None = None
+        self.yaw = -18.0
+        self.pitch = 5.0
+        self.last_pos = None
 
     def show_skin(self, path: str | None) -> None:
-        if not path or not Path(path).is_file():
-            if self._view is not None:
-                self._view.setHtml(self._html(None), QUrl("https://novacraft.local/"))
-            else:
-                self.placeholder.setText("3D-ПРОСМОТР СКИНА\n\nЗагрузи PNG-скин, чтобы посмотреть модель.\nМодель можно вращать мышью.")
-            return
-        try:
-            raw = Path(path).read_bytes()
-            source = "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
-        except OSError as exc:
-            self.placeholder.setText(f"Не удалось открыть скин:\n{exc}")
-            return
-        if self._view is None:
-            try:
-                from PySide6.QtWebEngineWidgets import QWebEngineView
-                self._view = QWebEngineView(self)
-                self._view.setMinimumHeight(360)
-                self._layout.removeWidget(self.placeholder)
-                self.placeholder.hide()
-                self._layout.addWidget(self._view)
-            except Exception as exc:
-                self.placeholder.setText(f"Не удалось запустить 3D-просмотр:\n{exc}")
-                return
-        self._view.setHtml(self._html(source), QUrl("https://novacraft.local/"))
+        self.skin_path = Path(path) if path and Path(path).is_file() else None
+        self.skin_image = None
+        if self.skin_path:
+            img = QImage(str(self.skin_path))
+            if not img.isNull():
+                legacy = img.height() == 32 * (img.width() // 64) and img.width() >= 64
+                img = img.scaled(64, 32 if legacy else 64, Qt.IgnoreAspectRatio, Qt.FastTransformation)
+                if legacy:
+                    canvas = QImage(64, 64, QImage.Format_RGBA8888)
+                    canvas.fill(Qt.transparent)
+                    painter = QPainter(canvas)
+                    painter.drawImage(0, 0, img)
+                    painter.end()
+                    img = canvas
+                self.skin_image = img.convertToFormat(QImage.Format_RGBA8888)
+        self.update()
+
+    def _project(self, point):
+        import math
+        x, y, z = point
+        yaw, pitch = math.radians(self.yaw), math.radians(self.pitch)
+        rx = x * math.cos(yaw) + z * math.sin(yaw)
+        rz = -x * math.sin(yaw) + z * math.cos(yaw)
+        ry = (y - 4.0) * math.cos(pitch) - rz * math.sin(pitch)
+        depth = (y - 4.0) * math.sin(pitch) + rz * math.cos(pitch)
+        focal = max(250.0, min(self.width(), self.height()) * 1.35)
+        factor = focal / max(18.0, 80.0 - depth)
+        return QPointF(self.width() * 0.50 + rx * factor, self.height() * 0.54 - ry * factor), depth
 
     @staticmethod
-    def _html(source: str | None) -> str:
-        skin_json = json.dumps(source or "")
-        html = r'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#0d0f18;color:#b7b8c7;font:14px 'Segoe UI',sans-serif}#wrap{height:100%;display:flex;align-items:center;justify-content:center}canvas{max-width:100%;max-height:100%;outline:none}#msg{position:absolute;bottom:16px;left:0;right:0;text-align:center;color:#777d91;font-size:12px;pointer-events:none}</style>
-<script src="https://cdn.jsdelivr.net/npm/skinview3d@3.4.2/bundles/skinview3d.bundle.js"></script></head>
-<body><div id="wrap"><canvas id="skin" width="360" height="420"></canvas><div id="msg"></div></div><script>
-const skinSource=__SKIN_JSON__;
-function waitForSkin(){
- if(!window.skinview3d){document.getElementById('msg').textContent='Для 3D-просмотра требуется подключение к интернету';return;}
- if(!skinSource){document.getElementById('msg').textContent='Скин ещё не загружен';return;}
- try{const canvas=document.getElementById('skin');const viewer=new skinview3d.SkinViewer({canvas:canvas,width:360,height:420,skin:skinSource,background:0x0d0f18});viewer.controls.enableRotate=true;viewer.controls.enableZoom=false;viewer.controls.autoRotate=true;viewer.controls.autoRotateSpeed=0.7;viewer.camera.position.set(28,18,38);if(skinview3d.IdleAnimation)viewer.animation=new skinview3d.IdleAnimation();document.getElementById('msg').textContent='Перетаскивай мышью, чтобы вращать модель';}
- catch(e){document.getElementById('msg').textContent='Не удалось отобразить скин';}
-}
-window.addEventListener('load',waitForSkin);
-</script></body></html>'''
-        return html.replace("__SKIN_JSON__", skin_json)
+    def _vertices(x0, x1, y0, y1, z0, z1):
+        return {
+            "tl_front": (x0, y1, z1), "tr_front": (x1, y1, z1),
+            "br_front": (x1, y0, z1), "bl_front": (x0, y0, z1),
+            "tl_back": (x0, y1, z0), "tr_back": (x1, y1, z0),
+            "br_back": (x1, y0, z0), "bl_back": (x0, y0, z0),
+        }
+
+    def _part_faces(self, box, uv_name, overlay=False):
+        cx, cy, cz, width, height, depth = box
+        if overlay:
+            width, height, depth = width + 0.16, height + 0.16, depth + 0.16
+        verts = self._vertices(cx-width/2, cx+width/2, cy-height/2, cy+height/2, cz-depth/2, cz+depth/2)
+        result = []
+        for face, keys in self.FACE_POINTS.items():
+            rect = self.FACE_UV[uv_name][face]
+            projected = [self._project(verts[k]) for k in keys]
+            result.append((sum(v[1] for v in projected)/4, [v[0] for v in projected], rect))
+        return result
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, False)
+        painter.fillRect(self.rect(), QColor("#0d0f18"))
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(135, 88, 214, 28))
+        painter.drawEllipse(QRectF(self.width()*0.16, self.height()*0.13, self.width()*0.68, self.height()*0.67))
+        if self.skin_image is None:
+            painter.setPen(QColor("#9690a9"))
+            painter.drawText(self.rect(), Qt.AlignCenter, "ЗАГРУЗИ PNG-СКИН\n\n3D-просмотр появится здесь")
+            painter.end()
+            return
+
+        specs = [
+            ((-2, -6, 0, 4, 12, 4), "right_leg", False),
+            (( 2, -6, 0, 4, 12, 4), "left_leg", False),
+            (( 0,  6, 0, 8, 12, 4), "body", False),
+            ((-6,  6, 0, 4, 12, 4), "right_arm", False),
+            (( 6,  6, 0, 4, 12, 4), "left_arm", False),
+            (( 0, 16, 0, 8,  8, 8), "head", False),
+            ((-2, -6, 0, 4, 12, 4), "right_leg", True),
+            (( 2, -6, 0, 4, 12, 4), "left_leg", True),
+            (( 0,  6, 0, 8, 12, 4), "body", True),
+            ((-6,  6, 0, 4, 12, 4), "right_arm", True),
+            (( 6,  6, 0, 4, 12, 4), "left_arm", True),
+            (( 0, 16, 0, 8,  8, 8), "hat", True),
+        ]
+        render_list = []
+        for box, uv_name, overlay in specs:
+            for depth, points, rect in self._part_faces(box, uv_name, overlay):
+                x, y, w, h = rect
+                crop = self.skin_image.copy(x, y, w, h)
+                src = QPolygonF([QPointF(0, 0), QPointF(w, 0), QPointF(w, h), QPointF(0, h)])
+                dst = QPolygonF(points)
+                transform = QTransform()
+                if QTransform.quadToQuad(src, dst, transform):
+                    render_list.append((depth, transform, crop, w, h))
+        for _depth, transform, crop, w, h in sorted(render_list, key=lambda entry: entry[0]):
+            painter.save()
+            painter.setTransform(transform, True)
+            painter.drawImage(QRectF(0, 0, w, h), crop)
+            painter.restore()
+        painter.setPen(QColor(125, 91, 184, 80))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRoundedRect(self.rect().adjusted(1, 1, -2, -2), 10, 10)
+        painter.end()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.last_pos = event.position().toPoint()
+
+    def mouseMoveEvent(self, event):
+        if self.last_pos is not None and event.buttons() & Qt.LeftButton:
+            pos = event.position().toPoint()
+            delta = pos - self.last_pos
+            self.yaw += delta.x() * 0.75
+            self.pitch = max(-30.0, min(30.0, self.pitch + delta.y() * 0.45))
+            self.last_pos = pos
+            self.update()
+
+    def mouseReleaseEvent(self, event):
+        self.last_pos = None
 
 
 class LoginDialog(QDialog):
