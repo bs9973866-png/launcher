@@ -13,8 +13,8 @@ from typing import Any, Callable
 
 import requests
 import minecraft_launcher_lib
-from PySide6.QtCore import Qt, QThread, Signal, QUrl
-from PySide6.QtGui import QIcon, QDesktopServices, QPixmap, QImage, QPainter, QPolygonF, QTransform, QPointF, QRectF, QColor
+from PySide6.QtCore import Qt, QThread, Signal, QUrl, QPointF, QRectF
+from PySide6.QtGui import QIcon, QDesktopServices, QPixmap, QImage, QPainter, QPolygonF, QTransform, QColor
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QPushButton, QComboBox, QLineEdit, QListWidget, QListWidgetItem,
