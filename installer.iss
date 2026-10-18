@@ -1,9 +1,9 @@
 #define AppName "NovaCraft Launcher"
-#define AppVersion "0.1.0"
+#define AppVersion "0.2.0"
 #define AppExeName "NovaCraftLauncher.exe"
 
 [Setup]
-AppId={{A4B5A7C3-3E9C-4B47-9F9B-NOVACRAFT01}
+AppId={{7B9A6D20-6D6C-43B1-89F4-5CF6C90A11AC}
 AppName={#AppName}
 AppVersion={#AppVersion}
 DefaultDirName={autopf}\NovaCraft Launcher
@@ -15,13 +15,17 @@ SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64
 SetupIconFile=icon.ico
 UninstallDisplayIcon={app}\{#AppExeName}
+WizardStyle=modern
 
 [Files]
 Source: "dist\NovaCraftLauncher.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\NovaCraft Launcher"; Filename: "{app}\{#AppExeName}"
-Name: "{commondesktop}\NovaCraft Launcher"; Filename: "{app}\{#AppExeName}"
+Name: "{commondesktop}\NovaCraft Launcher"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
+
+[Tasks]
+Name: "desktopicon"; Description: "Создать ярлык на рабочем столе"; GroupDescription: "Дополнительные параметры:"; Flags: unchecked
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "Запустить NovaCraft Launcher"; Flags: nowait postinstall skipifsilent
